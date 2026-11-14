@@ -5,7 +5,7 @@ mod env;
 #[cfg(target_os = "ios")]
 mod ios_layout;
 mod lines;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "ios"))]
 mod linux_http;
 #[cfg(target_os = "linux")]
 mod linux_webview;
@@ -95,9 +95,11 @@ pub fn run() {
                 let state: tauri::State<Api> = app.state();
                 state.session.bind(dir);
             }
-            // Linux 的 <video> 由 GStreamer 播放，它只认常规 HTTP scheme；
-            // 这里起一个 loopback 代理，前端与 m3u8 改写都指向它（见 linux_http.rs）
-            #[cfg(target_os = "linux")]
+            // Linux 的 <video> 由 GStreamer 播放；iOS 16.x 的 WKWebView 没有
+            // MediaSource，hls.js 用不上，只能让 AVFoundation 原生播 HLS。
+            // 两者都只认常规 HTTP，所以起一个 loopback 媒体代理，前端与 m3u8
+            // 改写都指向它（见 linux_http.rs）。macOS 仍用 hg:// scheme handler。
+            #[cfg(any(target_os = "linux", target_os = "ios"))]
             linux_http::start();
             // macOS 主窗口在此创建：先按系统红绿灯尺寸算出居中位置（见 macos_titlebar.rs）
             #[cfg(target_os = "macos")]

@@ -32,12 +32,13 @@ export const isMobile = isAndroid || isIos;
 
 /** 媒体基址随平台不同（Rust 侧对应 `media::LOCAL_ORIGIN`，两边必须一致）：
  *  Windows / Android → `http://<scheme>.localhost`（自定义协议，WebView 自己加载）
- *  macOS / iOS → `hg://localhost`（WebKit 的 scheme handler）
- *  Linux → `http://127.0.0.1:17650`：WebKitGTK 的 <video> 由 GStreamer 播放，
- *          它拿不到自定义 scheme，所以由 Rust 侧在 loopback 上起 HTTP 代理
- *          （`src-tauri/src/linux_http.rs`，端口必须与此一致）。 */
+ *  macOS → `hg://localhost`（WebKit 的 scheme handler）
+ *  Linux / iOS → `http://127.0.0.1:17650`：Linux 的 <video> 由 GStreamer 播放，
+ *    iOS 16.x 的 WKWebView 没有 MediaSource，hls.js 用不上、只能让 AVFoundation
+ *    原生播 HLS，而它不认 `hg://` 自定义协议。两者都由 Rust 侧在 loopback 上起
+ *    HTTP 媒体代理（见 `src-tauri/src/linux_http.rs`，端口必须与此一致）。 */
 export const LOCAL =
-  isMacos || isIos ? "hg://localhost" : isLinux ? "http://127.0.0.1:17650" : "http://hg.localhost";
+  isMacos ? "hg://localhost" : (isLinux || isIos) ? "http://127.0.0.1:17650" : "http://hg.localhost";
 
 /** src 是否已是本地协议地址（避免在详情页把代理地址再包一层） */
 export const isLocalMedia = (src: string) => src.startsWith(`${LOCAL}/`);

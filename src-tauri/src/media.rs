@@ -1,8 +1,9 @@
 //! 媒体层：封面解密 + HLS 代理。
 //!
 //! 站点封面是 AES-128-CBC 密文，m3u8 内部分片/key 又可能被 WebView 的 CORS 拦住，
-//! 所以图片与视频统一走本地自定义协议（Windows/Android 为 `http://hg.localhost`，
-//! macOS 为 `hg://localhost`，见 [`LOCAL_ORIGIN`]）。
+//! 所以图片与视频统一走本地代理：Windows/Android 为 `http://hg.localhost`，
+//! macOS 为 `hg://localhost`；Linux 与 iOS 16.x 因为原生播放器不认自定义协议，
+//! 改走 loopback HTTP `http://127.0.0.1:17650`（见 [`LOCAL_ORIGIN`]）。
 
 use crate::net::fetch_bytes;
 use aes::cipher::{BlockDecrypt, KeyInit};
@@ -20,10 +21,11 @@ use tauri::http::{Response, StatusCode};
 /// 前端 `src/api.ts` 的 `LOCAL` 必须与此一致，否则封面与视频全部加载失败。
 #[cfg(any(target_os = "windows", target_os = "android"))]
 pub const LOCAL_ORIGIN: &str = "http://hg.localhost";
-/// Linux 走 loopback HTTP：WebKitGTK 的播放器是 GStreamer，它拿不到自定义 scheme。
-#[cfg(target_os = "linux")]
+/// Linux 的 GStreamer 与 iOS 16.x 的 AVFoundation 都拿不到自定义 scheme：
+/// 两者改走只监听 127.0.0.1 的 HTTP 媒体服务（见 linux_http.rs）。
+#[cfg(any(target_os = "linux", target_os = "ios"))]
 pub const LOCAL_ORIGIN: &str = crate::linux_http::ORIGIN;
-#[cfg(not(any(target_os = "windows", target_os = "android", target_os = "linux")))]
+#[cfg(not(any(target_os = "windows", target_os = "android", target_os = "linux", target_os = "ios")))]
 pub const LOCAL_ORIGIN: &str = "hg://localhost";
 
 const IMG_KEY: &[u8] = b"f5d965df75336270";

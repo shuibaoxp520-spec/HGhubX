@@ -78,11 +78,24 @@ export async function copyPlaybackLog() {
   await copyText(text);
 }
 
-export function mediaResource(raw: string) {
+/** 本机媒体代理地址（hg:// 自定义协议，或 Linux/iOS 的 loopback HTTP）。
+ *  取回被代理的上游 URL，保证 resource 指纹与 host 统计不随平台协议变化。 */
+function proxiedTarget(raw: string): string | null {
   try {
     const url = new URL(raw);
-    if (url.protocol === "hg:" || url.hostname === "hg.localhost") raw = url.searchParams.get("u") || raw;
-  } catch { /* still fingerprint invalid targets without logging their contents */ }
+    if (
+      url.protocol === "hg:" ||
+      url.hostname === "hg.localhost" ||
+      (url.hostname === "127.0.0.1" && url.port === "17650")
+    ) {
+      return url.searchParams.get("u");
+    }
+  } catch { /* invalid URL, fall through */ }
+  return null;
+}
+
+export function mediaResource(raw: string) {
+  raw = proxiedTarget(raw) || raw;
   let hash = 2166136261;
   for (const b of new TextEncoder().encode(raw)) hash = Math.imul(hash ^ b, 16777619) >>> 0;
   return `r${hash.toString(16).padStart(8, "0")}`;
@@ -93,16 +106,11 @@ export function mediaResource(raw: string) {
  * 不含 path 与 query，所以能落盘：出问题时一眼看出是源站、还是某个分片域名挂了。
  */
 export function mediaHost(raw: string): string {
-  try {
-    const url = new URL(raw);
-    if (url.protocol === "hg:" || url.hostname === "hg.localhost") {
-      const inner = url.searchParams.get("u");
-      if (inner) return new URL(inner).host;
-    }
-    return url.host;
-  } catch {
-    return "?";
+  const inner = proxiedTarget(raw);
+  if (inner) {
+    try { return new URL(inner).host; } catch { /* fall through */ }
   }
+  try { return new URL(raw).host; } catch { return "?"; }
 }
 
 function ranges(value: TimeRanges) {

@@ -45,6 +45,9 @@ jobs:
             /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" "$plist" 2>/dev/null || true
             /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$plist"
             /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$plist"
+            # loopback 媒体服务：给可能弹出的本地网络授权一个明确文案
+            /usr/libexec/PlistBuddy -c "Delete :NSLocalNetworkUsageDescription" "$plist" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :NSLocalNetworkUsageDescription string 本机媒体代理仅用于在本设备内播放视频" "$plist" 2>/dev/null || true
           done
 
       - name: 构建并打包 ipa
