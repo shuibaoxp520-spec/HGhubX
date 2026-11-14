@@ -2,7 +2,7 @@ import { Button, Input } from "./ios/controls";
 import { Loader } from "./ios/effects";
 import React, { useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
-import { fmtTime, platform, playlist } from "../api";
+import { fmtTime, isMobile, platform, playlist } from "../api";
 import { mediaErrorMessage } from "../mediaErrors";
 import { mediaHost, mediaResource, observeHls, usePlayerDiagnostics } from "../playbackDiagnostics";
 import { usePlaybackActivity } from "../usePlaybackActivity";
@@ -25,6 +25,14 @@ type Props = {
   controls?: boolean;
   className?: string;
   diagnosticContext?: Record<string, unknown>;
+};
+
+/** iPhone 的 WKWebView 没有元素级 Fullscreen API，只能走视频元素自己的
+ *  webkitEnterFullscreen（交给系统播放器，顺带能用侧键调音量）。 */
+type WebkitVideo = HTMLVideoElement & {
+  webkitEnterFullscreen?: () => void;
+  webkitExitFullscreen?: () => void;
+  webkitDisplayingFullscreen?: boolean;
 };
 
 export default function Player({
@@ -166,9 +174,16 @@ export default function Player({
   }, []);
 
   useEffect(() => {
-    const onFs = () => setFull(!!document.fullscreenElement);
+    const video = videoRef.current as WebkitVideo | null;
+    const onFs = () => setFull(!!document.fullscreenElement || !!video?.webkitDisplayingFullscreen);
     document.addEventListener("fullscreenchange", onFs);
-    return () => document.removeEventListener("fullscreenchange", onFs);
+    video?.addEventListener("webkitbeginfullscreen", onFs);
+    video?.addEventListener("webkitendfullscreen", onFs);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFs);
+      video?.removeEventListener("webkitbeginfullscreen", onFs);
+      video?.removeEventListener("webkitendfullscreen", onFs);
+    };
   }, []);
 
   const toggle = () => {
@@ -188,6 +203,12 @@ export default function Player({
   };
 
   const toggleFull = () => {
+    const video = videoRef.current as WebkitVideo | null;
+    if (platform === "ios" && video && typeof video.webkitEnterFullscreen === "function") {
+      if (video.webkitDisplayingFullscreen) video.webkitExitFullscreen?.();
+      else video.webkitEnterFullscreen();
+      return;
+    }
     const el = wrapRef.current;
     if (!el) return;
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
@@ -246,14 +267,14 @@ export default function Player({
       )}
 
       {controls && (
-        <div className="player-inline-controls absolute inset-x-0 bottom-0 px-3 pb-2 pt-8 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className={`player-inline-controls absolute inset-x-0 bottom-0 px-3 pb-2 pt-8 transition-opacity ${isMobile ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
           <Input aria-label="播放进度" type="range" {...seek.inputProps}
             className="hg-range w-full" style={{ ...seek.inputProps.style, "--fill": `${pct}%` } as React.CSSProperties} />
           <div className="flex items-center gap-3 mt-1 text-white">
             <Button onClick={toggle} aria-label={playing ? "暂停" : "播放"} className="pressable">
               {playing ? <IPauseF size={16} /> : <IPlayF size={16} />}
             </Button>
-            <Button onClick={() => onToggleMute?.()} aria-label={muted ? "取消静音" : "静音"} className="pressable">
+            <Button onClick={() => onToggleMute?.()} aria-label={muted ? "取消静音" : "静音"} title="静音切换（音量大小请用手机侧键调节）" className="pressable">
               {muted ? <IVolMute size={16} /> : <IVol size={16} />}
             </Button>
             <span className="text-[12px] tabular-nums text-white/85">{fmtTime(seek.time)} / {fmtTime(duration)}</span>
