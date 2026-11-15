@@ -54,6 +54,14 @@ export default function Player({
   const [rate, setRate] = useState(1);
   const [errMsg, setErrMsg] = useState<string>("");
   const [controlsLocked, setControlsLocked] = useState(false);
+  /* 安卓 WebView 的 HTMLMediaElement.volume 可写（iOS 只读），简化版播放器
+     原本没有音量状态，这里自己维护一份。volumeAvailable 用于运行时探测：
+     部分 WebView 把音量完全交给系统，写进去读回来不变，就不留一个假滑块。 */
+  const [volume, setVolume] = useState(1);
+  const [volumeAvailable, setVolumeAvailable] = useState(true);
+  /* 安卓 WebView 宿主未必实现 WebChromeClient.onShowCustomView，
+     requestFullscreen 会静默失败；用 CSS 铺满视口兜底，保证点全屏一定有反应。 */
+  const [cssFull, setCssFull] = useState(false);
   const seek = useSeekInput({ time, duration, enabled: active && !controlsLocked, resetKey: src,
     onInteraction: (phase, input, target, pointerTarget) => trace(`seek.input.${phase}`, { input, target, pointer_target: pointerTarget }),
     onSeek: (target, input) => {
@@ -166,6 +174,23 @@ export default function Player({
     video.muted = muted;
   }, [muted]);
 
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || platform !== "android") return;
+    try { video.volume = volume; } catch { /* 系统接管音量，忽略 */ }
+  }, [volume]);
+
+  const changeVolume = (v: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    try {
+      video.volume = v;
+      if (Math.abs(video.volume - v) > 0.02) { setVolumeAvailable(false); return; }
+    } catch { setVolumeAvailable(false); return; }
+    setVolume(v);
+    if (muted && v > 0) onToggleMute?.();
+  };
+
   // iOS 内联播放：部分 WKWebView 只认 HTML 属性，不认 React 的 playsInline
   useEffect(() => {
     const video = videoRef.current;
@@ -204,9 +229,24 @@ export default function Player({
 
   const toggleFull = () => {
     const video = videoRef.current as WebkitVideo | null;
+    // iOS：交给系统播放器，顺带能用侧键调音量
     if (platform === "ios" && video && typeof video.webkitEnterFullscreen === "function") {
       if (video.webkitDisplayingFullscreen) video.webkitExitFullscreen?.();
       else video.webkitEnterFullscreen();
+      return;
+    }
+    if (platform === "android") {
+      // 元素级 Fullscreen API 在部分 Android WebView 上会静默失败（宿主没接
+      // onShowCustomView），所以这里直接用 CSS 把播放器铺满视口，退出也由自己管。
+      if (cssFull || document.fullscreenElement) {
+        if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+        setCssFull(false);
+        try { screen.orientation?.unlock?.(); } catch { /* 无方向锁 API */ }
+      } else {
+        setCssFull(true);
+        // best-effort：能转横屏就转，Activity 锁死竖屏时静默忽略
+        try { screen.orientation?.lock?.("landscape")?.catch?.(() => {}); } catch { /* ignore */ }
+      }
       return;
     }
     const el = wrapRef.current;
@@ -216,9 +256,12 @@ export default function Player({
   };
 
   const pct = duration > 0 ? (seek.time / duration) * 100 : 0;
+  const fullIcon = full || cssFull;
 
   return (
-    <div ref={wrapRef} className={`relative bg-black overflow-hidden group ${className}`}>
+    <div ref={wrapRef}
+      className={`${cssFull ? "" : "relative"} bg-black overflow-hidden group ${className}`}
+      style={cssFull ? { position: "fixed", inset: 0, zIndex: 9999, width: "100%", height: "100%" } : undefined}>
       <div className="absolute inset-0" inert={controlsLocked}>
       <video
         ref={videoRef}
@@ -274,17 +317,25 @@ export default function Player({
             <Button onClick={toggle} aria-label={playing ? "暂停" : "播放"} className="pressable">
               {playing ? <IPauseF size={16} /> : <IPlayF size={16} />}
             </Button>
-            <Button onClick={() => onToggleMute?.()} aria-label={muted ? "取消静音" : "静音"} title="静音切换（音量大小请用手机侧键调节）" className="pressable">
+            <Button onClick={() => onToggleMute?.()} aria-label={muted ? "取消静音" : "静音"}
+              title={platform === "android" && volumeAvailable ? "静音切换（音量拖动右侧滑块，或用手机侧键）" : "静音切换（音量大小请用手机侧键调节）"}
+              className="pressable">
               {muted ? <IVolMute size={16} /> : <IVol size={16} />}
             </Button>
+            {platform === "android" && volumeAvailable && (
+              <Input aria-label="音量" type="range" min={0} max={1} step={0.05}
+                value={muted ? 0 : volume} onChange={(e) => changeVolume(Number(e.target.value))}
+                className="hg-range player-inline-volume"
+                style={{ "--fill": `${(muted ? 0 : volume) * 100}%` } as React.CSSProperties} />
+            )}
             <span className="text-[12px] tabular-nums text-white/85">{fmtTime(seek.time)} / {fmtTime(duration)}</span>
             <div className="flex-1" />
             <Button onClick={() => setControlsLocked(true)} aria-label="锁定播放控制" title="锁定播放控制" aria-pressed={false} className="pressable">
               <ILockF size={16} />
             </Button>
             <Button onClick={cycleRate} className="text-[12px] font-bold text-white/85 pressable tabular-nums">{rate}x</Button>
-            <Button onClick={toggleFull} aria-label="全屏" className="pressable">
-              {full ? <ICompress size={16} /> : <IExpand size={16} />}
+            <Button onClick={toggleFull} aria-label={fullIcon ? "退出全屏" : "全屏"} className="pressable">
+              {fullIcon ? <ICompress size={16} /> : <IExpand size={16} />}
             </Button>
           </div>
         </div>

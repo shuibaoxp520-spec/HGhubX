@@ -1,0 +1,98 @@
+name: Android check (self-signed arm64 apk)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  android:
+    name: Android arm64 build
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # ubuntu runner 自带 Android SDK；沿用 release.yml 的做法，避免 license 交互卡住
+      - name: 准备 Android SDK / NDK
+        run: |
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          SDKM="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null 2>&1 || true
+          "$SDKM" --install "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
+          echo "NDK_HOME=$SDK/ndk/28.2.13676358" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: swatinem/rust-cache@v2.9.3
+        continue-on-error: true
+        timeout-minutes: 8
+        with:
+          workspaces: src-tauri -> target
+          key: android-arm64
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: 生成 Android 工程
+        run: pnpm tauri android init --ci
+
+      # 只出 arm64：真机基本都是 arm64，省掉另外两个 ABI 的 Rust 交叉编译
+      - name: 编译 APK
+        run: pnpm tauri android build --apk --split-per-abi --target aarch64
+
+      # 官方 release.yml 用 ANDROID_KEY_* secrets 签名，fork 里没有这些 secret。
+      # 这里临时生成一把本地 keystore，产出的 APK 可直接安装。
+      # 注意：签名与官方包不同，安装前必须先卸载官方版。
+      - name: 用临时 keystore 签名
+        run: |
+          set -euo pipefail
+          KS="$RUNNER_TEMP/hghubx-local.keystore"
+          keytool -genkeypair -keystore "$KS" -alias hghubx -keyalg RSA -keysize 2048 \
+            -validity 10000 -storepass hghubxlocal -keypass hghubxlocal \
+            -dname "CN=HGhubX Local, OU=Local, O=Local, L=Local, ST=Local, C=CN" > /dev/null 2>&1
+          BT="$(ls "$ANDROID_SDK_ROOT/build-tools" | sort -V | tail -1)"
+          APKSIGNER="$ANDROID_SDK_ROOT/build-tools/$BT/apksigner"
+          APK_DIR="src-tauri/gen/android/app/build/outputs/apk"
+          mkdir -p artifacts
+          LIST="$(find "$APK_DIR" -name '*-unsigned.apk' | sort)"
+          if [ -z "$LIST" ]; then LIST="$(find "$APK_DIR" -name '*-release*.apk' | sort)"; fi
+          if [ -z "$LIST" ]; then
+            echo "::error::没有找到可签名的 release APK"
+            find "$APK_DIR" -type f | head -30
+            exit 1
+          fi
+          i=0
+          for f in $LIST; do
+            i=$((i+1))
+            if [ "$i" -eq 1 ]; then
+              out="artifacts/HGhubX_2.0.0_android_fixed.apk"
+            else
+              out="artifacts/HGhubX_2.0.0_android_fixed_$i.apk"
+            fi
+            "$APKSIGNER" sign --ks "$KS" --ks-key-alias hghubx \
+              --ks-pass pass:hghubxlocal --key-pass pass:hghubxlocal \
+              --v4-signing-enabled false --out "$out" "$f"
+            "$APKSIGNER" verify --print-certs "$out" | head -3
+            echo "signed: $out ($(stat -c%s "$out") bytes)"
+          done
+          rm -f "$KS"
+          ls -lh artifacts
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android
+          path: artifacts/*
+          if-no-files-found: error
