@@ -238,14 +238,13 @@ export default function Player({
     if (platform === "android") {
       // 元素级 Fullscreen API 在部分 Android WebView 上会静默失败（宿主没接
       // onShowCustomView），所以这里直接用 CSS 把播放器铺满视口，退出也由自己管。
+      // 不尝试 screen.orientation.lock：该 API 在多数 WebView 里需要原生全屏
+      // 上下文才会生效，且 TS 的 lib.dom 也未声明它，性价比太低。
       if (cssFull || document.fullscreenElement) {
         if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
         setCssFull(false);
-        try { screen.orientation?.unlock?.(); } catch { /* 无方向锁 API */ }
       } else {
         setCssFull(true);
-        // best-effort：能转横屏就转，Activity 锁死竖屏时静默忽略
-        try { screen.orientation?.lock?.("landscape")?.catch?.(() => {}); } catch { /* ignore */ }
       }
       return;
     }
